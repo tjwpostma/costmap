@@ -186,16 +186,16 @@ public class costMAP extends Application {
                         System.out.println("Importing Pipeline Data ... ");
                         costList = costs.addPipelineCorridor(costList,headerInfo, "Datasets/ASCII/pipelines.asc");
                     }
-                    BufferedWriter outputConstruction = new BufferedWriter(new FileWriter("Outputs\\Construction Costs.txt"));
+                    BufferedWriter outputConstruction = new BufferedWriter(new FileWriter("Outputs/Construction Costs.txt"));
                     
                     System.out.println("Calculating Distance ...");
                     costList = costs.solveDistance(headerInfo, distMult, costList, "Datasets/ASCII/landcover.asc");
                     System.out.println("Writing to files...");
                     costs.writeTxt(costList, headerInfo, outputConstruction);
                     System.out.println("Construction calculations are complete.");
-//                    
+
                     if (chkDefaultLandcover.isSelected()) {
-                        System.out.println("Importing Landcover Data for ROWS ... ");
+                        System.out.println("Importing Landcover Data for RightsOfWay ... ");
                         rowList =  costs.landcoverInput(isSelectedPop, "Datasets/ASCII/landcover.asc");
                     }
 ////                    if (chkDefaultPipelines.isSelected()) {
@@ -203,10 +203,31 @@ public class costMAP extends Application {
 ////                        rowList = costs.addPipelineCorridor(rowList,headerInfo, "Datasets/ASCII/pipelines.asc");
 ////                    }
                     rowList = costs.solveDistance(headerInfo, distMult, rowList, "Datasets/ASCII/landcover.asc");
-                    BufferedWriter outputROWS = new BufferedWriter(new FileWriter("Outputs\\RightOfWay Costs.txt"));
+                    BufferedWriter outputROWS = new BufferedWriter(new FileWriter("Outputs/RightOfWay Costs.txt"));
                     costs.writeTxt(rowList, headerInfo, outputROWS);
-//                    
+
                     System.out.println("The Rights of way calculations are complete. ");
+
+                    // Aggregate costs to per-pixel values and write raster visualization
+                    System.out.println("Generating raster visualization...");
+                    int rows = (int) headerInfo.get("Rows");
+                    int cols = (int) headerInfo.get("Columns");
+                    double[][] constructionGrid = new double[rows][cols];
+
+                    int cellIndex = 1;
+                    for (int i = 0; i < rows; i++) {
+                        for (int j = 0; j < cols; j++) {
+                            if (costList.get(cellIndex) != null) {
+                                double[] costKernel = (double[]) costList.get(cellIndex);
+                                constructionGrid[i][j] = costs.aggregateCellCost(costKernel);
+                            }
+                            cellIndex++;
+                        }
+                    }
+
+                    writeRaster rasterWriter = new writeRaster();
+                    rasterWriter.writeToRaster(constructionGrid);
+                    System.out.println("Raster exported to Outputs/construction.png");
                     
                 } catch (IOException ex) {
                     Logger.getLogger(costMAP.class.getName()).log(Level.SEVERE, null, ex);
@@ -222,7 +243,7 @@ public class costMAP extends Application {
         canButton.setOnAction(new EventHandler<ActionEvent>() {
             @Override
             public void handle(ActionEvent e) {
-                //Just making sure stuff is working witht his print
+                //Just making sure stuff is working with this print
                 System.out.println("Thank you for canceling. I can rest now.");
 
                 return;

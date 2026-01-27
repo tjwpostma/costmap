@@ -5,6 +5,8 @@
  */
 package cost_MAP;
 
+import org.w3c.dom.ls.LSOutput;
+
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.FileNotFoundException;
@@ -21,11 +23,24 @@ import java.util.List;
 
 public class costSolver {
 //    
-    int[] rows = getRowPositions();
-    int[] cols = getColPositions();
-    
+    int[] rows = {0,-1,0,1,0,-1,-1,1,1};
+    int[] cols = {0, 0,1,0,-1,-1,1,1,-1};
+
+    /**
+     * Parses ESRI ASCII raster header to extract grid metadata.
+     * Reads the first 6 lines of an ASCII raster file and extracts dimensions,
+     * geographic coordinates, cell size, and no-data value.
+     *
+     * @param path File path to the .asc raster file
+     * @return Dictionary containing keys: {Columns, Rows, xllCorner, yllCorner, CellSize, NoData}
+     *         Example: {NoData=-9999, CellSize=0.008333333333, xllCorner=-88.683333333822,
+     *         Columns=220, Rows=174, yllCorner=37.641666667611}
+     * @throws FileNotFoundException if raster file not found
+     * @throws IOException if error reading file
+     */
     public Dictionary getHeader(String path) throws FileNotFoundException, IOException {
-        
+
+//returns the info as a header dictionary {NoData=-9999, CellSize=0.008333333333, xllCorner=-88.683333333822, Columns=220, Rows=174, yllCorner=37.641666667611}
 //        ArrayList header = new ArrayList();
         Dictionary header = new Hashtable();
         BufferedReader  br = new BufferedReader(new FileReader(path));
@@ -63,23 +78,35 @@ public class costSolver {
         return header;
     }
 
+    /**
+     * Loads raster grid data from ESRI ASCII file into a 2D matrix.
+     * Reads data values after the 6-line header and populates a double[rows][cols] array.
+     * WARNING: Large rasters (>10K x 10K) consume significant heap memory.
+     *
+     * @param headerInfo Header Dictionary from getHeader() containing Rows and Columns
+     * @param path File path to the .asc raster file
+     * @return 2D double array [rows][columns] containing grid values; no-data cells are -9999
+     * @throws FileNotFoundException if raster file not found
+     * @throws IOException if error reading file
+     */
     public double[][] getDetails(Dictionary headerInfo, String path) throws FileNotFoundException, IOException {
 
+        //returns the big number chunk below the header
         BufferedReader br = new BufferedReader(new FileReader(path));
         
         double [][] aoiMatrix = new double[(int) headerInfo.get("Rows")][(int) headerInfo.get("Columns")];
-        //initiate reader
-        String line = br.readLine();
+        //initiate reader, read lines in sequence
+        String line = br.readLine();  //ncol
         //read next line and then get number of rows
-        line = br.readLine();
+        line = br.readLine();  //nrows
 
-        line = br.readLine();
+        line = br.readLine();  //xll corner
 
-        line = br.readLine();
+        line = br.readLine();  //yll corner
 
-        line = br.readLine();
+        line = br.readLine();  //cell size
 
-        line = br.readLine();
+        line = br.readLine();  //no data
 
         line = br.readLine();
         while (line != null) {
@@ -97,7 +124,26 @@ public class costSolver {
         return aoiMatrix;
 
     }
-    
+
+    /**
+     * Applies landcover classification weights to create baseline cost surface.
+     * Reads NLCD landcover codes and maps them to weights from Datasets/weights/landcover.txt.
+     * Optionally incorporates population density for urban/developed land codes (21-24).
+     * Generates 9-cell kernels for each grid cell storing costs to traverse to neighbors.
+     *
+     * Landcover codes:
+     * - 11=water, 12=evergreen forest, 21-24=developed/urban, 31=barren, 41-43=forest,
+     *   52=shrub/scrub, 71=grassland, 81-82=pasture/cropland, 90/95=wetland
+     *
+     * Population density tiers (for codes 21-24):
+     * - 0-5 pers/km²: weight 0.75 | 5-25: 1.5 | 25-100: 2.5 | 100+: 5.0
+     * - If population not selected: all developed land weight 5.0
+     *
+     * @param isSelectedPop If true, incorporates population.asc density overlay for urban cells
+     * @param path Path to landcover.asc raster
+     * @return Dictionary<Integer cellId, double[9] costs> where cellId starts at 1 (not 0)
+     * @throws Exception if weights file or landcover raster cannot be read
+     */
     public Dictionary landcoverInput(boolean isSelectedPop, String path) throws FileNotFoundException, IOException, Exception {
 
         //Read in landcover weighting
@@ -105,7 +151,7 @@ public class costSolver {
         BufferedReader br1 = new BufferedReader(new FileReader("Datasets/weights/landcover.txt"));
         String line = br1.readLine();
         while ((line = br1.readLine()) != null) {
-            String[] splited = line.split("\\s");
+            String[] splited = line.split("\\s+");
             weights.add(splited[2]);
         }
         br1.close();
@@ -123,92 +169,120 @@ public class costSolver {
             System.out.println("Importing Population Data ...");
             popMatrix = getDetails(headerInfo, "Datasets/ASCII/population.asc");
         }
+
+        // Precompute parameters once (outside the loops)
+        int noData = (int) headerInfo.get("NoData");
+
+        double w0 = Double.parseDouble((String) weights.get(0));
+        double w1 = Double.parseDouble((String) weights.get(1));
+        double w2 = Double.parseDouble((String) weights.get(2));
+        double w3 = Double.parseDouble((String) weights.get(3));
+        double w4 = Double.parseDouble((String) weights.get(4));
+        double w5 = Double.parseDouble((String) weights.get(5));
+        double w6 = Double.parseDouble((String) weights.get(6));
+        double w7 = Double.parseDouble((String) weights.get(7));
+        double w8 = Double.parseDouble((String) weights.get(8));
         
         for (int i = 0; i < nlcdMatrix.length; i++) {
 
             for (int j = 0; j < nlcdMatrix[0].length; j++) {
-                //no data using mask
+
                 int value = (int) nlcdMatrix[i][j];
-                int a = (int) headerInfo.get("NoData");
-                
-                if (nlcdMatrix[i][j] == 21 || nlcdMatrix[i][j] == 22 || nlcdMatrix[i][j] == 23 || nlcdMatrix[i][j] == 24) {
-                    if (isSelectedPop != false) {
 
-                        double cellPop = cellPop(headerInfo,popMatrix, i, j);
-                        if (cellPop == 0) {
-                            tempMatrix[i][j] = 0.75;
-                        } else if (cellPop > 0 & cellPop <= 5) {
-                            tempMatrix[i][j] = 1;
-                        } else if (cellPop > 5 & cellPop <= 25) {
-                            tempMatrix[i][j] = 1.5;
-                        } else if (cellPop > 25 & cellPop <= 100) {
-
-                            tempMatrix[i][j] = 2.5;
-                        } else {
-                            tempMatrix[i][j] = 5;
-
-                        }
-
-                    } else {
-                        tempMatrix[i][j] = 5;
-                    }
-                }
                 switch(value){
                     case 11:
-                        tempMatrix[i][j] = Double.parseDouble((String) weights.get(0));
+                        tempMatrix[i][j] = w0;
                         break;
                     case 12:
-                        tempMatrix[i][j] = Double.parseDouble((String) weights.get(1));
+                        tempMatrix[i][j] = w1;
                         break;    
+                    case 21:
+                    case 22:
+                    case 23:
+                    case 24:
+                        if (isSelectedPop) {
+                            double cellPop = cellPop(headerInfo, popMatrix, i, j);
+
+                            if (cellPop == 0) {
+                                tempMatrix[i][j] = 0.75;
+                            } else if (cellPop <= 5) {
+                                tempMatrix[i][j] = 1.0;
+                            } else if (cellPop <= 25) {
+                                tempMatrix[i][j] = 1.5;
+                            } else if (cellPop <= 100) {
+                                tempMatrix[i][j] = 2.5;
+                            } else {
+                                tempMatrix[i][j] = 5.0;
+                            }
+                        } else {
+                            tempMatrix[i][j] = 5.0;
+                        }
+                        break;
                     case 31:
-                        tempMatrix[i][j] = Double.parseDouble((String) weights.get(2));
+                        tempMatrix[i][j] = w2;
                         break;
                     case 41:
                     case 42:
                     case 43:
-                        tempMatrix[i][j] = Double.parseDouble((String) weights.get(3));
+                        tempMatrix[i][j] = w3;
                         break;
                         
                     case 52:
-                        tempMatrix[i][j] = Double.parseDouble((String) weights.get(4));
+                        tempMatrix[i][j] = w4;
                         break;
                         
                     case 71:
-                        tempMatrix[i][j] = Double.parseDouble((String) weights.get(5));
+                        tempMatrix[i][j] = w5;
                         break;
                     case 81:
-                        tempMatrix[i][j] = Double.parseDouble((String) weights.get(6));
+                        tempMatrix[i][j] = w6;
                         break;
                     case 82:
-                        tempMatrix[i][j] = Double.parseDouble((String) weights.get(7));
+                        tempMatrix[i][j] = w7;
                         break;
                     case 90:
                     case 95:
-                        tempMatrix[i][j] = Double.parseDouble((String) weights.get(8));
+                        tempMatrix[i][j] = w8;
                         break;
                     default:
-                        tempMatrix[i][j] = (int) headerInfo.get("NoData");
+                        tempMatrix[i][j] = noData;
 
                 }
 
         }
         }
         Dictionary costList = new Hashtable();
-        int cell = 0;
+        int cell = 1;  // Cells have 1-based indexing in cost list
         for (int i = 0; i < tempMatrix.length; i++) {
             for (int j = 0; j < tempMatrix[0].length; j++) {
-                    cell = cell +1;
-                    
                     double[] landKernel = kernel(tempMatrix, i, j);
                     double[] costs = solveLand(landKernel);
                     costList.put(cell, costs);
+                    cell+=1;
             }
         }
         
         
        return costList;
     }
-    
+
+    /**
+     * Alternative landcover processing that applies federal land overlay AFTER landcover weighting.
+     * Multiplies landcover costs by federal land agency multipliers from fed.asc overlay.
+     * Use this mode when federal land restrictions should override standard landcover weights.
+     *
+     * Federal agency codes and multipliers in fed.asc:
+     * - 1 (BLM), 2 (BOR): 0.5x | 3 (DOD): 2x | 4 (FS): 1.5x | 5 (FWS): 2.5x
+     * - 6 (NPS): 2x | 7 (Other): 3x | 8 (TVA): 0.75x | 9 (State Parks): 2x | 10 (Reservations): 50x
+     *
+     * Currently only one mode (landcoverInput or landRowInput) is used per run;
+     * GUI checkbox would need to be added to toggle between modes.
+     *
+     * @param isSelectedPop If true, incorporates population.asc density overlay for urban cells
+     * @param path Path to landcover.asc raster
+     * @return Dictionary<Integer cellId, double[9] costs> with federal land multipliers applied
+     * @throws Exception if weights file or rasters cannot be read
+     */
     public Dictionary landRowInput(boolean isSelectedPop, String path) throws FileNotFoundException, IOException, Exception {
 
         //Read in landcover weighting
@@ -216,7 +290,7 @@ public class costSolver {
         BufferedReader br1 = new BufferedReader(new FileReader("Datasets/weights/landrows.txt"));
         String line = br1.readLine();
         while ((line = br1.readLine()) != null) {
-            String[] splited = line.split("\\s");
+            String[] splited = line.split("\\s+");
             weights.add(splited[2]);
         }
         br1.close();
@@ -236,70 +310,81 @@ public class costSolver {
             popMatrix = getDetails(headerInfo, "Datasets/ASCII/population.asc");
         }
 
+        // Precompute parameters once (outside the loops)
+        int noData = (int) headerInfo.get("NoData");
+
+        double w0 = Double.parseDouble((String) weights.get(0));
+        double w1 = Double.parseDouble((String) weights.get(1));
+        double w2 = Double.parseDouble((String) weights.get(2));
+        double w3 = Double.parseDouble((String) weights.get(3));
+        double w4 = Double.parseDouble((String) weights.get(4));
+        double w5 = Double.parseDouble((String) weights.get(5));
+        double w6 = Double.parseDouble((String) weights.get(6));
+        double w7 = Double.parseDouble((String) weights.get(7));
+        double w8 = Double.parseDouble((String) weights.get(8));
+
         for (int i = 0; i < nlcdMatrix.length; i++) {
 
             for (int j = 0; j < nlcdMatrix[0].length; j++) {
-                //no data using mask
+
                 int value = (int) nlcdMatrix[i][j];
-                int a = (int) headerInfo.get("NoData");
-                
-                if (nlcdMatrix[i][j] == 21 || nlcdMatrix[i][j] == 22 || nlcdMatrix[i][j] == 23 || nlcdMatrix[i][j] == 24) {
-                    if (isSelectedPop != false) {
-
-                        double cellPop = cellPop(headerInfo,popMatrix, i, j);
-                        if (cellPop == 0) {
-                            tempMatrix[i][j] = 0.75;
-                        } else if (cellPop > 0 & cellPop <= 5) {
-                            tempMatrix[i][j] = 1;
-                        } else if (cellPop > 5 & cellPop <= 25) {
-                            tempMatrix[i][j] = 1.5;
-                        } else if (cellPop > 25 & cellPop <= 100) {
-
-                            tempMatrix[i][j] = 2.5;
-                        } else {
-                            tempMatrix[i][j] = 5;
-
-                        }
-
-                    } else {
-                        tempMatrix[i][j] = 5;
-                    }
-                }
                 switch(value){
                     case 11:
-                        tempMatrix[i][j] = Double.parseDouble((String) weights.get(0));
+                        tempMatrix[i][j] = w0;
                         break;
                     case 12:
-                        tempMatrix[i][j] = Double.parseDouble((String) weights.get(1));
-                        break;    
+                        tempMatrix[i][j] = w1;
+                        break;
+                    case 21:
+                    case 22:
+                    case 23:
+                    case 24:
+                        if (isSelectedPop) {
+                            double cellPop = cellPop(headerInfo, popMatrix, i, j);
+
+                            if (cellPop == 0) {
+                                tempMatrix[i][j] = 0.75;
+                            } else if (cellPop <= 5) {
+                                tempMatrix[i][j] = 1.0;
+                            } else if (cellPop <= 25) {
+                                tempMatrix[i][j] = 1.5;
+                            } else if (cellPop <= 100) {
+                                tempMatrix[i][j] = 2.5;
+                            } else {
+                                tempMatrix[i][j] = 5.0;
+                            }
+                        } else {
+                            tempMatrix[i][j] = 5.0;
+                        }
+                        break;
                     case 31:
-                        tempMatrix[i][j] = Double.parseDouble((String) weights.get(2));
+                        tempMatrix[i][j] = w2;
                         break;
                     case 41:
                     case 42:
                     case 43:
-                        tempMatrix[i][j] = Double.parseDouble((String) weights.get(3));
+                        tempMatrix[i][j] = w3;
                         break;
-                        
+
                     case 52:
-                        tempMatrix[i][j] = Double.parseDouble((String) weights.get(4));
+                        tempMatrix[i][j] = w4;
                         break;
-                        
+
                     case 71:
-                        tempMatrix[i][j] = Double.parseDouble((String) weights.get(5));
+                        tempMatrix[i][j] = w5;
                         break;
                     case 81:
-                        tempMatrix[i][j] = Double.parseDouble((String) weights.get(6));
+                        tempMatrix[i][j] = w6;
                         break;
                     case 82:
-                        tempMatrix[i][j] = Double.parseDouble((String) weights.get(7));
+                        tempMatrix[i][j] = w7;
                         break;
                     case 90:
                     case 95:
-                        tempMatrix[i][j] = Double.parseDouble((String) weights.get(8));
+                        tempMatrix[i][j] = w8;
                         break;
                     default:
-                        tempMatrix[i][j] = (int) headerInfo.get("NoData");
+                        tempMatrix[i][j] = noData;
 
                 }
             
@@ -310,77 +395,88 @@ public class costSolver {
 
             for (int j = 0; j < fedMatrix[0].length; j++) {
                     
-                    if (fedMatrix[i][j] == (int) headerInfo.get("NoData")) {
-                        tempMatrix[i][j] = -9999;
-                    } //BLM
-                    else if (fedMatrix[i][j] == 1) {
-                        tempMatrix[i][j] = tempMatrix[i][j] * 0.5;
+                int fed = fedMatrix[i][j];
+                double value = tempMatrix[i][j];
 
-                    } //BOR
-                    else if (fedMatrix[i][j] == 2) {
-                        tempMatrix[i][j] = tempMatrix[i][j] * 0.5;
+                switch (fed) {
+                    case noData:
+                        tempMatrix[i][j] = noData;
+                        break;
 
-                    } //DOD
-                    else if (fedMatrix[i][j] == 3) {
-                        tempMatrix[i][j] = tempMatrix[i][j] * 2;
+                    case 1: // BLM
+                    case 2: // BOR
+                        tempMatrix[i][j] = value * 0.5;
+                        break;
 
-                    } //FS
-                    else if (fedMatrix[i][j] == 4) {
-                        tempMatrix[i][j] = tempMatrix[i][j] * 1.5;
+                    case 3: // DOD
+                        tempMatrix[i][j] = value * 2.0;
+                        break;
 
-                    } //FWS
-                    else if (fedMatrix[i][j] == 5) {
-                        tempMatrix[i][j] = tempMatrix[i][j] * 2.5;
+                    case 4: // FS
+                        tempMatrix[i][j] = value * 1.5;
+                        break;
 
-                    } //NPS
-                    else if (fedMatrix[i][j] == 6) {
-                        tempMatrix[i][j] = tempMatrix[i][j] * 2;
-                     
-//                        System.out.println(tempMatrix[i][j]);
-                    } //Other
-                    else if (fedMatrix[i][j] == 7) {
-                        tempMatrix[i][j] = tempMatrix[i][j] * 3;
+                    case 5: // FWS
+                        tempMatrix[i][j] = value * 2.5;
+                        break;
 
-                    } //TVA
-                    else if (fedMatrix[i][j] == 8) {
-                        tempMatrix[i][j] = tempMatrix[i][j] * 0.75;
+                    case 6: // NPS
+                        tempMatrix[i][j] = value * 2.0;
+                        break;
 
-                    } //State Parks
-                    else if (fedMatrix[i][j] == 9) {
-                        tempMatrix[i][j] = tempMatrix[i][j] * 2;
+                    case 7: // Other
+                        tempMatrix[i][j] = value * 3.0;
+                        break;
 
-                    } //Reservations
-                    else if (fedMatrix[i][j] == 10) {
-                        tempMatrix[i][j] = tempMatrix[i][j] * 50;
+                    case 8: // TVA
+                        tempMatrix[i][j] = value * 0.75;
+                        break;
 
-                    }
-                    else{
-                        tempMatrix[i][j] = -9999;
-                    }
+                    case 9: // State Parks
+                        tempMatrix[i][j] = value * 2.0;
+                        break;
+
+                    case 10: // Reservations
+                        tempMatrix[i][j] = value * 50.0;
+                        break;
+
+                    default:
+                        tempMatrix[i][j] = noData;
                 }
-            }
-        
-        Dictionary costList = new Hashtable();
-        int cell = 0;
-        for (int i = 0; i < tempMatrix.length; i++) {
-            for (int j = 0; j < tempMatrix[0].length; j++) {
-                    cell = cell +1;
-                    
-                    double[] landKernel = kernel(tempMatrix, i, j);
-                    double[] costs = solveLand(landKernel);
-                    costList.put(cell, costs);
             }
         }
         
-        
+        Dictionary costList = new Hashtable();
+        int cell = 1;  // Cells have 1-based indexing in cost list
+        for (int i = 0; i < tempMatrix.length; i++) {
+            for (int j = 0; j < tempMatrix[0].length; j++) {
+                    double[] landKernel = kernel(tempMatrix, i, j);
+                    double[] costs = solveLand(landKernel);
+                    costList.put(cell, costs);
+                    cell+=1;
+            }
+        }
        return costList;
     }
     
-    
+    /**
+     * Converts raster population count to population density (persons/km²).
+     * Accounts for latitude effects on longitude distance using haversine formula.
+     * Used to apply density-based modifiers to urban landcover cells.
+     *
+     * CRITICAL: Verify lat/lon corner order matches raster orientation (yllCorner typically bottom-left).
+     * Inverted corners will produce inverted/incorrect density calculations.
+     *
+     * @param headerInfo Header Dictionary from getHeader() containing yllCorner, xllCorner, CellSize
+     * @param array Population raster matrix loaded via getDetails()
+     * @param i Row index of cell
+     * @param j Column index of cell
+     * @return Population density in persons/km²
+     */
     private double cellPop(Dictionary headerInfo,double[][] array, int i, int j) {
         double pop = array[i][j];
         double lon = (Double) headerInfo.get("xllCorner");
-        double lat = (Double) headerInfo.get("xllCorner") + (((int) headerInfo.get("Rows") - (i + 1)) * (Double) headerInfo.get("CellSize")) + ((Double) headerInfo.get("CellSize")/ 2);
+        double lat = (Double) headerInfo.get("yllCorner") + (((int) headerInfo.get("Rows") - (i+1)) * (Double) headerInfo.get("CellSize")) + ((Double) headerInfo.get("CellSize")/2);
         double cHeight = haversineDistance(lat, lon, lat + (Double) headerInfo.get("CellSize"), lon);
         double cWidth = haversineDistance(lat, lon, lat, lon + (Double) headerInfo.get("CellSize"));
         double cArea = cWidth * cHeight;
@@ -404,41 +500,63 @@ public class costSolver {
     private double toRad(double latChange) {
         return (double) (latChange * Math.PI / 180);
     }
-    
+
+    /**
+     * Applies geographic distance multipliers to cost network.
+     * Scales costs based on actual cell-to-cell distances (not just cell count).
+     * Different multipliers for cardinal (E/W/N/S) vs diagonal directions.
+     * Must be called after landcoverInput() to have valid cost Dictionary.
+     *
+     * @param headerInfo Header Dictionary from getHeader()
+     * @param distMult Distance multiplier matrix from distanceMultiplier() [rows][4]
+     *                 where [i][0]=E/W, [i][1]=N/S, [i][2]=NE/SW, [i][3]=NW/SE
+     * @param costList Dictionary from landcoverInput() with initial costs
+     * @param path Path to landcover.asc (used to iterate through grid dimensions)
+     * @return Updated costList with distance-scaled values
+     */
     public Dictionary solveDistance(Dictionary headerInfo, double[][] distMult, Dictionary costList, String path) throws IOException {
         double[][] nlcdMatrix = getDetails(headerInfo, path);
 
-        int indexNew = 0;
+        int indexNew = 1;
         for (int z = 0; z < nlcdMatrix.length; z++) {
             for (int j = 0; j < nlcdMatrix[0].length; j++) {
-                indexNew = indexNew + 1;
                 if (indexNew < costList.size()) {
                     double[] costs = (double[]) costList.get(indexNew);
                     for (int i = 0; i < costs.length; i++) {
                         if (i == 2 || i == 4) {
-                            costs[i] = round((costs[i]) * distMult[i][0], 2);
+                            costs[i] = round((costs[i]) * distMult[z][0], 2);
                         } else if (i == 1 || i == 3) {
-                            costs[i] = round((costs[i]) * distMult[i][1], 2);
+                            costs[i] = round((costs[i]) * distMult[z][1], 2);
                         } else if (i == 5 || i == 6) {
-                            costs[i] = round((costs[i]) * distMult[i][2], 2);
+                            costs[i] = round((costs[i]) * distMult[z][2], 2);
                         } else {
-                            costs[i] = round((costs[i]) * distMult[i][3], 2);
+                            costs[i] = round((costs[i]) * distMult[z][3], 2);
                         }
 
                         costList.put(indexNew, costs);
                     }
 
                 }
+                indexNew+=1;
             }
         }
-
         return costList;
-
     }
     
-
-    
-    
+    /**
+     * Adds terrain cost increments based on slope angle and aspect direction.
+     * Slope increments: 0.1 (0.5-1°), 0.2 (1-1.5°), 0.3 (1.5-2°), 0.4 (2-2.5°), 0.5 (2.5-3°), 1.0 (>3°).
+     * Aspect-aware adjustments: +0.2 if upslope in direction of travel, +0.1 if crossslope.
+     * Average new slope cost with center and neighbor per cell: (slopeCenter + slopeNeighbor) / 2.
+     *
+     * Aspect codes (from aspectInput()): 1-8 for N/NW/W/SW/S/SE/E/NE.
+     * Kernel indexing for directions: 1=N, 2=E, 3=S, 4=W, 5=NW, 6=NE, 7=SE, 8=SW.
+     *
+     * @param costList Dictionary from landcoverInput() with baseline costs
+     * @param isSelectedAspect If true, applies directional upslope penalties via aspect.asc
+     * @param path Path to slope.asc raster (aspect.asc loaded if isSelectedAspect=true)
+     * @return Updated costList with slope/aspect costs added
+     */
     public Dictionary slopeInput(Dictionary costList, boolean isSelectedAspect, String path) throws IOException {
         
         Dictionary headerInfo = getHeader(path);
@@ -446,10 +564,9 @@ public class costSolver {
         double[][] tempMatrixSlope = new double[slopeMatrix.length][slopeMatrix[0].length];
         double[][] aspectMatrix = new double[slopeMatrix.length][slopeMatrix[0].length];
 
-        if (isSelectedAspect = true) {
+        if (isSelectedAspect == true) {
             System.out.println("Importing Aspect Data ...");
-            Dictionary headerAspect = getHeader(path);
-            aspectMatrix = getDetails(headerAspect, path);
+            aspectMatrix = aspectInput();
         } else {
             for (int i = 0; i < aspectMatrix.length; i++) {
                 for (int j = 0; j < aspectMatrix[0].length; j++) {
@@ -492,8 +609,8 @@ public class costSolver {
                 indexNew = indexNew + 1;
                 if (indexNew < costList.size()) {
                     double[] costs = (double[]) costList.get(indexNew);
-                    double[] slopeKernel = kernel(tempMatrixSlope, j, j);
-                    double[] aspectKernel = kernel(aspectMatrix, j, j);
+                    double[] slopeKernel = kernel(tempMatrixSlope, i, j);
+                    double[] aspectKernel = kernel(aspectMatrix, i, j);
                     costs = solveSlope(costs, slopeKernel,aspectKernel);
                     costList.put(indexNew, costs);
                 }
@@ -501,7 +618,6 @@ public class costSolver {
             }
         }
         return costList;
-       
     }
     
     private int[][] cellCount() throws FileNotFoundException, IOException {
@@ -525,7 +641,7 @@ public class costSolver {
         Dictionary headerInfo = getHeader("Datasets/ASCII/landcover.asc");
         int rows = (int)headerInfo.get("Rows");
         int columns = (int)headerInfo.get("Columns");
-//        int cellAmount = rows * columns; 
+//        int cellAmount = rows * columns;
         int[][] cellNumber = cellCount();
 //        for (int  = 0; i < 9; i++)
         for (int i = 0; i < rows; i++) {
@@ -543,9 +659,9 @@ public class costSolver {
      private double[] solveSlope(double[] costs, double[] slopeKernel, double[] aspectKernel){
         double[] kernel = slopeKernel;
       
-        for (int j = 1; j < 9; j++){ 
+        for (int j = 1; j < 9; j++){
                     if(slopeKernel[0] >0){
-                        if (slopeKernel[0] > 1 & (j == 1 || j == 2 || j == 3 || j == 4)) {
+                        if (slopeKernel[0] > 0 & (j == 1 || j == 2 || j == 3 || j == 4)) {
 
                             int zAdjust = (j - 1) * 2 + 1;
 
@@ -563,7 +679,7 @@ public class costSolver {
 
                         }
 //
-                        else if (slopeKernel[j] != -9999 & slopeKernel[j] > 1 & (j == 1 || j == 2 || j == 3 || j == 4)) {
+                        else if (slopeKernel[j] != -9999 & slopeKernel[j] > 0 & (j == 1 || j == 2 || j == 3 || j == 4)) {
 
                             int zAdjust = (j - 1) * 2 + 1;
 
@@ -578,7 +694,7 @@ public class costSolver {
                             }
 
                         }
-                        else if (slopeKernel[0] > 1 & (j == 5 || j == 6 || j == 7 || j == 8)) {
+                        else if (slopeKernel[0] > 0 & (j == 5 || j == 6 || j == 7 || j == 8)) {
 
                             int zAdjust = (j - 4) * 2 + 1;
                             double aspectDifference = Math.abs(aspectKernel[0] - zAdjust);
@@ -593,7 +709,7 @@ public class costSolver {
 
                         }
 
-                        else if (slopeKernel[j] != -9999 & slopeKernel[j] > 1 & (j == 5 || j == 6 || j == 7 || j == 8)) {
+                        else if (slopeKernel[j] != -9999 & slopeKernel[j] > 0 & (j == 5 || j == 6 || j == 7 || j == 8)) {
 
                             int zAdjust = (j - 4) * 2;
                             double aspectDifference = Math.abs(aspectKernel[j] - zAdjust);
@@ -654,7 +770,7 @@ public class costSolver {
                 }
             }
         }
-        System.out.println(Arrays.deepToString(tempMatrix));
+        // System.out.println(Arrays.deepToString(tempMatrix));
         return tempMatrix;
     }
 
@@ -664,7 +780,17 @@ public class costSolver {
         System.out.println("Construction Costs continue ...");
         return costList;
     }
-    
+
+    /**
+     * Applies river crossing penalty to cost network.
+     * Multiplies costs by 1.25 when route crosses a river (detected by rivers.asc raster).
+     * Uses crossIncrease() to check 3x3 sub-kernels for actual feature crossing.
+     *
+     * @param costList Dictionary from previous aggregation step
+     * @param headerInfo Header Dictionary from getHeader()
+     * @param path Path to rivers.asc raster
+     * @return Updated costList with river crossing penalties applied
+     */
     public Dictionary addRiverCrossings(Dictionary costList, Dictionary headerInfo, String path) throws IOException {
         Dictionary roadInfo = getHeader(path);
         double[][] roadMatrix = getDetails(roadInfo, path);
@@ -684,7 +810,17 @@ public class costSolver {
         }
         return costList;
     }
-    
+
+    /**
+     * Applies road crossing penalty to cost network.
+     * Multiplies costs by 1.25 when route crosses a road (detected by roads.asc raster).
+     * Uses crossIncrease() to check 3x3 sub-kernels for actual feature crossing.
+     *
+     * @param costList Dictionary from previous aggregation step
+     * @param headerInfo Header Dictionary from getHeader()
+     * @param path Path to roads.asc raster
+     * @return Updated costList with road crossing penalties applied
+     */
     public Dictionary addRoadCrossings(Dictionary costList, Dictionary headerInfo, String path) throws IOException {
         Dictionary roadInfo = getHeader(path);
         double[][] roadMatrix = getDetails(roadInfo, path);
@@ -704,7 +840,17 @@ public class costSolver {
         }
         return costList;
     }
-    
+
+    /**
+     * Applies railroad crossing penalty to cost network.
+     * Multiplies costs by 1.25 when route crosses a railroad (detected by railroads.asc raster).
+     * Uses crossIncrease() to check 3x3 sub-kernels for actual feature crossing.
+     *
+     * @param costList Dictionary from previous aggregation step
+     * @param headerInfo Header Dictionary from getHeader()
+     * @param path Path to railroads.asc raster
+     * @return Updated costList with railroad crossing penalties applied
+     */
     public Dictionary addRailCrossings(Dictionary costList, Dictionary headerInfo, String path) throws IOException {
         Dictionary roadInfo = getHeader(path);
         double[][] roadMatrix = getDetails(roadInfo, path);
@@ -724,7 +870,18 @@ public class costSolver {
         }
         return costList;
     }
-    
+
+    /**
+     * Applies pipeline corridor DISCOUNT to cost network.
+     * Unlike infrastructure crossings (penalties), existing pipelines offer cost reduction (0.75x multiplier).
+     * Uses rowDecrease() with 3x3 sub-kernel alignment detection to apply discount only along
+     * pipeline-aligned paths. This incentivizes route placement within existing right-of-way.
+     *
+     * @param costList Dictionary from previous aggregation step
+     * @param headerInfo Header Dictionary from getHeader()
+     * @param path Path to pipelines.asc raster
+     * @return Updated costList with pipeline corridor discounts applied
+     */
     public Dictionary addPipelineCorridor(Dictionary costList, Dictionary headerInfo, String path) throws IOException {
         Dictionary pipelineInfo = getHeader(path);
         double[][] pipeMatrix = getDetails(pipelineInfo, path);
@@ -735,7 +892,7 @@ public class costSolver {
                 indexNew = indexNew + 1;
                 if (indexNew < costList.size()) {
                     double[] costs = (double[]) costList.get(indexNew);
-                    double[] newCosts = rowDecrease(pipeMatrix,costs, j, j, weight);
+                    double[] newCosts = rowDecrease(pipeMatrix,costs, i, j, weight);
                     costList.put(indexNew, newCosts);
                 }
 
@@ -783,9 +940,7 @@ public class costSolver {
             }
 
         }
-
         return  costs;
-
     }
     
     public double[] crossIncrease(double[] costs, double[][] matrix, int i, int j, double weight) {
@@ -905,7 +1060,7 @@ public class costSolver {
                       costs[r] = costs[r] * weight;
                   }
             break;
-//            
+//
             case 5:
                   double[] kernel6 = kernel(matrix, z, d - 3);
                   //Case 1
@@ -946,104 +1101,98 @@ public class costSolver {
                     costs[r] = costs[r] * weight;
                 }
             break;
-            
-        
             }
         }
         
         return costs;
     }
 
+    /**
+     * Computes landcover costs between center cell and each neighbor.
+     * Averages the center cell cost with each neighbor's cost: (center + neighbor) / 2.
+     * Preserves -9999 (no-data) values for boundary cells and no-data cells.
+     *
+     * @param costKernel 9-element array from kernel() with landcover base weights
+     * @return double[9] array with averaged costs; costs[0]=center averaged with itself (== center value)
+     */
     public double[] solveLand(double[] costKernel) {
-        double[] costs = new double[9];
-        for (int j = 0; j < 9; j++) {
-            if (costKernel[j] == -9999) {
-                costs[j] = -9999;
+        final double noData = -9999;
+        int n = costKernel.length;
+        double[] costs = new double[n];
+
+        for (int j = 0; j < n; j++) {
+            if (costKernel[j] == noData || costKernel[0] == noData) {
+                costs[j] = noData;
             } else {
-                costs[j] = (costs[j] + ((costKernel[0] + costKernel[j]) / 2));
-            
+                costs[j] = 0.5 * (costKernel[0] + costKernel[j]);
+            }
         }
-        
-    }
+
         return costs;
     }
   
-    private int[] getColPositions() {
 
-        int[] xPosition = new int[9];
-        xPosition[0] = 0;
-        xPosition[1] = 0;
-        xPosition[2] = 1;
-        xPosition[3] = 0;
-        xPosition[4] = -1;
-        xPosition[5] = -1;
-        xPosition[6] = 1;
-        xPosition[7] = 1;
-        xPosition[8] = -1;
-        return xPosition;
-
-    }
-
-    private int[] getRowPositions() {
-
-        int[] yPosition = new int[9];
-        yPosition[0] = 0;
-        yPosition[1] = -1;
-        yPosition[2] = 0;
-        yPosition[3] = 1;
-        yPosition[4] = 0;
-        yPosition[5] = -1;
-        yPosition[6] = -1;
-        yPosition[7] = 1;
-        yPosition[8] = 1;
-        return yPosition;
-
-    }
     
     
-    //Kernel for calculations
+    /**
+     * Extracts a 9-cell kernel neighborhood around a grid cell.
+     * Returns the center cell and its 8 neighbors in a fixed array layout.
+     *
+     * Kernel layout (indices 0-8):
+     * <pre>
+     *   [5] [1] [6]
+     *   [4] [0] [2]
+     *   [8] [3] [7]
+     * </pre>
+     * Where: 0=center, 1=north, 2=east, 3=south, 4=west, 5=NW, 6=NE, 7=SE, 8=SW
+     *
+     * @param array 2D raster grid
+     * @param i Row index (0-based, from top)
+     * @param j Column index (0-based, from left)
+     * @return double[9] array with cell values; boundary cells return -9999 for out-of-bounds neighbors
+     */
     public double[] kernel(double[][] array, int i, int j) {
 
+        double noData = -9999;
         double[] kernel = new double[9];
 
         for (int r = 0; r < 9; r++) {
+            int ii = i + rows[r];
+            int jj = j + cols[r];
 
-            int row = rows[r];
-            int col = cols[r];
-
-            if ((i + row) < 0 || (i + row) > array.length - 1 || (j + col) < 0 || (j + col) > array[0].length - 1) {
-                kernel[r] = -9999;
+            if (ii < 0 || ii >= array.length || jj < 0 || jj >= array[0].length) {
+                kernel[r] = noData;
             } else {
-                kernel[r] = array[i + row][j + col];
-
+                kernel[r] = array[ii][jj];
             }
-
         }
 
         return kernel;
     }
     
-    //Kernel for calculations
+    // Kernel for calculations
     public int[] cellKernel(int[][] array, int i, int j) {
 
+        int noData = -9999;
         int[] kernelInt = new int[9];
 
         for (int r = 0; r < 9; r++) {
-
             int row = rows[r];
             int col = cols[r];
 
-            if ((i + row) < 0 || (i + row) > array.length - 1 || (j + col) < 0 || (j + col) > array[0].length - 1) {
-                kernelInt[r] = -9999;
+            int ii = i + row;
+            int jj = j + col;
+
+            if (ii < 0 || ii >= array.length || jj < 0 || jj >= array[0].length) {
+                kernelInt[r] = noData;
             } else {
-                kernelInt[r] = array[i + row][j + col];
-
+                kernelInt[r] = array[ii][jj];
             }
-
         }
+
         return kernelInt;
     }
-    
+
     private int getActiveNodes(Dictionary headerInfo, double[][] matrix) {
         int activeNodes = 0;
         for (int i = 0; i < matrix.length; i++) {
@@ -1067,7 +1216,24 @@ public class costSolver {
         return bd.doubleValue();
     }
     
-    
+
+    /**
+     * Exports cost network to tab-delimited text file for SimCCS pipeline routing.
+     * Writes grid metadata header followed by node-cost pairs.
+     * Filters out negative/no-data costs (non-traversable paths).
+     * Only includes neighbor connections with positive cost (>0).
+     *
+     * Output format:
+     * - Header: All Nodes, Active Nodes, nCols, nRows, xllCorner, yllCorner, cellSize, NODATA_value
+     * - Nodes: Tab-separated cell IDs for current cell and reachable neighbors
+     * - Costs: Tab-separated costs corresponding to neighbor cells
+     * - Example line: 37737\\t37517\\t37738\\t37957 (cells) -> \\t2.15\\t3.42\\t2.08\\t3.45 (costs)
+     *
+     * @param costList Dictionary from final aggregation pipeline
+     * @param headerInfo Header Dictionary from getHeader()
+     * @param outPut BufferedWriter to output file (typically Outputs/Construction Costs.txt)
+     * @throws IOException if file write fails
+     */
     public void writeTxt(Dictionary costList, Dictionary headerInfo, BufferedWriter outPut) throws IOException {
         
         double[][] cellMatrix = getDetails(headerInfo, "Datasets/ASCII/landcover.asc");
@@ -1153,7 +1319,17 @@ public class costSolver {
         
         outPut.close();
     }
-    
+
+    /**
+     * Computes per-row distance multipliers for each compass direction.
+     * Calculates actual geographic cell dimensions using haversine formula,
+     * accounting for latitude effects on longitude distance.
+     * Returns a matrix used by solveDistance() to scale costs geographically.
+     *
+     * @param headerInfo Header Dictionary from getHeader() containing coordinates and cellSize
+     * @return double[rows][4] where each row contains multipliers for:
+     *         [i][0]=E/W distance, [i][1]=N/S distance, [i][2]=diagonal NE/SW, [i][3]=diagonal NW/SE
+     */
     public double[][] distanceMultiplier(Dictionary headerInfo) {
 
         int rows = (int) headerInfo.get("Rows");
@@ -1208,9 +1384,30 @@ public class costSolver {
             cellMatrix[i][3] = haversineDistance(lat1, lon1, lat2, lon2);
 
         }
-
         return cellMatrix;
+    }
 
+    /**
+     * Aggregates the 9-cell cost kernel into a single per-pixel value.
+     * Computes the average cost to traverse to valid (non-negative) neighbors,
+     * excluding the center cell and any invalid cells marked as -9999.
+     *
+     * @param cellKernel double[9] array where index 0=center, indices 1-8=neighbors
+     * @return Average cost to valid neighbors; 0 if no valid neighbors exist
+     */
+    public double aggregateCellCost(double[] cellKernel) {
+        double sum = 0;
+        int validCount = 0;
+
+        // Skip index 0 (center), iterate through neighbors (1-8)
+        for (int i = 1; i < cellKernel.length; i++) {
+            if (cellKernel[i] >= 0) {  // Exclude no-data/invalid values
+                sum += cellKernel[i];
+                validCount++;
+            }
+        }
+
+        return validCount > 0 ? sum / validCount : 0;
     }
     
 }
