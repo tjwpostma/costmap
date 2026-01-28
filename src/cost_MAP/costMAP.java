@@ -226,7 +226,7 @@ public class costMAP extends Application {
                     }
 
                     writeRaster rasterWriter = new writeRaster();
-                    rasterWriter.writeToRaster(constructionGrid);
+                    rasterWriter.writeToRaster(constructionGrid, 0.0, 10.0);
                     System.out.println("Raster exported to Outputs/construction.png and Outputs/construction.bmp");
                     
                 } catch (IOException ex) {

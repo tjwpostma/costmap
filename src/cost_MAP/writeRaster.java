@@ -92,6 +92,7 @@ public class writeRaster {
         // Handle "all nodata"
         if (minVal == Double.MAX_VALUE) {
             // everything is nodata -> transparent PNG + black BMP
+            System.out.println("Warning: All values are nodata. Output rasters will be empty.");
             for (int i = 0; i < height; i++) {
                 for (int j = 0; j < width; j++) {
                     imagePng.setRGB(j, i, 0x00000000);
@@ -105,6 +106,9 @@ public class writeRaster {
 
         double range = maxVal - minVal;
         if (range == 0) range = 1;
+        
+        // Print color scale bounds to console
+        System.out.println("Color scale bounds: min = " + minVal + ", max = " + maxVal);
 
         for (int i = 0; i < height; i++) {
             for (int j = 0; j < width; j++) {
@@ -130,7 +134,65 @@ public class writeRaster {
         ImageIO.write(imageBmp, "bmp", new File(bmpPath));
     }
     
-}
-    
+    /**
+     * Write construction grid to raster images (PNG and BMP) with manually specified color scale bounds.
+     * Allows explicit control over the min/max values used for color normalization.
+     * Values outside the specified bounds are clipped to the scale.
+     * 
+     * @param constructionGrid 2D array of construction costs
+     * @param minVal Minimum value for color scale (lower bound)
+     * @param maxVal Maximum value for color scale (upper bound)
+     * @throws IOException if file write fails
+     */
+    public void writeToRaster(double[][] constructionGrid, double minVal, double maxVal) throws IOException {
+        String pngPath = "Outputs/construction.png";
+        String bmpPath = "Outputs/construction.bmp";
+
+        int height = constructionGrid.length;
+        int width  = constructionGrid[0].length;
+
+        // PNG with alpha (transparent nodata)
+        BufferedImage imagePng = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+        // BMP without alpha
+        BufferedImage imageBmp = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+
+        // Validate and handle edge cases
+        if (minVal >= maxVal) {
+            System.err.println("Error: minVal (" + minVal + ") must be less than maxVal (" + maxVal + ")");
+            return;
+        }
+
+        double range = maxVal - minVal;
+        if (range == 0) range = 1;
+        
+        // Print color scale bounds to console
+        System.out.println("Color scale bounds (manual): min = " + minVal + ", max = " + maxVal);
+
+        for (int i = 0; i < height; i++) {
+            for (int j = 0; j < width; j++) {
+                int argb;
+                int rgb;
+
+                if (constructionGrid[i][j] == 0) {
+                    // nodata
+                    argb = 0x00000000;  // transparent in PNG
+                    rgb  = 0xFFFFFF;    // black in BMP (choose whatever background you want)
+                } else {
+                    // Clamp value to specified range and normalize
+                    double clampedValue = Math.max(minVal, Math.min(maxVal, constructionGrid[i][j]));
+                    double normalizedValue = (clampedValue - minVal) / range;
+                    argb = getTurboColor(normalizedValue);   // returns ARGB
+                    rgb  = argb & 0x00FFFFFF;                // strip alpha for BMP
+                }
+
+                imagePng.setRGB(j, i, argb);
+                imageBmp.setRGB(j, i, rgb);
+            }
+        }
+
+        ImageIO.write(imagePng, "png", new File(pngPath));
+        ImageIO.write(imageBmp, "bmp", new File(bmpPath));
+    }
     
 
+}
