@@ -61,16 +61,23 @@ public class writeRaster {
         return (255 << 24) | (red << 16) | (green << 8) | blue;
     }
 
-    public void writeToRaster(double[][] constructionGrid) throws IOException{
-        Dictionary headerInfo = costs.getHeader("Datasets/ASCII/landcover.asc");
-        // int rows = (int)headerInfo.get("Rows");
-        // int columns = (int)headerInfo.get("Columns");
-        String path = "Outputs/" + "construction" + ".png";
-        BufferedImage image = new BufferedImage(constructionGrid[0].length, constructionGrid.length, BufferedImage.TYPE_INT_ARGB);
+    public void writeToRaster(double[][] constructionGrid) throws IOException {
+        // Dictionary headerInfo = costs.getHeader("Datasets/ASCII/landcover.asc");
+
+        String pngPath = "Outputs/construction.png";
+        String bmpPath = "Outputs/construction.bmp";
+
+        int height = constructionGrid.length;
+        int width  = constructionGrid[0].length;
+
+        // PNG with alpha (transparent nodata)
+        BufferedImage imagePng = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+        // BMP without alpha
+        BufferedImage imageBmp = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
 
         // Find min and max for normalization, ignoring NoData value (0)
         double minVal = Double.MAX_VALUE;
-        double maxVal = Double.MIN_VALUE;
+        double maxVal = -Double.MAX_VALUE;
 
         for (int i = 0; i < constructionGrid.length; i++) {
             for (int j = 0; j < constructionGrid[0].length; j++) {
@@ -81,27 +88,47 @@ public class writeRaster {
                 }
             }
         }
-        double range = maxVal - minVal;
-        if (range == 0) range = 1; // Avoid division by zero
 
-        for (int i = 0; i < constructionGrid.length; i++) {
-            for (int j = 0; j < constructionGrid[0].length; j++) {
-                int color;
+        // Handle "all nodata"
+        if (minVal == Double.MAX_VALUE) {
+            // everything is nodata -> transparent PNG + black BMP
+            for (int i = 0; i < height; i++) {
+                for (int j = 0; j < width; j++) {
+                    imagePng.setRGB(j, i, 0x00000000);
+                    imageBmp.setRGB(j, i, 0x000000); // black
+                }
+            }
+            ImageIO.write(imagePng, "png", new File(pngPath));
+            ImageIO.write(imageBmp, "bmp", new File(bmpPath));
+            return;
+        }
+
+        double range = maxVal - minVal;
+        if (range == 0) range = 1;
+
+        for (int i = 0; i < height; i++) {
+            for (int j = 0; j < width; j++) {
+                int argb;
+                int rgb;
+
                 if (constructionGrid[i][j] == 0) {
-                    // noData value: fully transparent
-                    color = 0x00000000;
+                    // nodata
+                    argb = 0x00000000;  // transparent in PNG
+                    rgb  = 0x000000;    // black in BMP (choose whatever background you want)
                 } else {
                     double normalizedValue = (constructionGrid[i][j] - minVal) / range;
-                    color = getTurboColor(normalizedValue);
+                    argb = getTurboColor(normalizedValue);   // returns ARGB
+                    rgb  = argb & 0x00FFFFFF;                // strip alpha for BMP
                 }
-                image.setRGB(j, i, color);  // Mind swapped index order.
+
+                imagePng.setRGB(j, i, argb);
+                imageBmp.setRGB(j, i, rgb);
             }
         }
-        File ImageFile = new File(path);
-        
-        ImageIO.write(image, "png", ImageFile);
+
+        ImageIO.write(imagePng, "png", new File(pngPath));
+        ImageIO.write(imageBmp, "bmp", new File(bmpPath));
     }
-}
     
 
     
