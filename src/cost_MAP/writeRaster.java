@@ -95,7 +95,7 @@ public class writeRaster {
             for (int i = 0; i < height; i++) {
                 for (int j = 0; j < width; j++) {
                     imagePng.setRGB(j, i, 0x00000000);
-                    imageBmp.setRGB(j, i, 0x000000); // black
+                    imageBmp.setRGB(j, i, 0xFFFFFF); // black
                 }
             }
             ImageIO.write(imagePng, "png", new File(pngPath));
@@ -114,7 +114,7 @@ public class writeRaster {
                 if (constructionGrid[i][j] == 0) {
                     // nodata
                     argb = 0x00000000;  // transparent in PNG
-                    rgb  = 0x000000;    // black in BMP (choose whatever background you want)
+                    rgb  = 0xFFFFFF;    // black in BMP (choose whatever background you want)
                 } else {
                     double normalizedValue = (constructionGrid[i][j] - minVal) / range;
                     argb = getTurboColor(normalizedValue);   // returns ARGB

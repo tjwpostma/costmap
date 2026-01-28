@@ -129,6 +129,7 @@ public class costSolver {
      * Applies landcover classification weights to create baseline cost surface.
      * Reads NLCD landcover codes and maps them to weights from Datasets/weights/landcover.txt.
      * Optionally incorporates population density for urban/developed land codes (21-24).
+     * Applies federal land agency multipliers from fed.asc overlay.
      * Generates 9-cell kernels for each grid cell storing costs to traverse to neighbors.
      *
      * Landcover codes:
@@ -138,6 +139,10 @@ public class costSolver {
      * Population density tiers (for codes 21-24):
      * - 0-5 pers/km²: weight 0.75 | 5-25: 1.5 | 25-100: 2.5 | 100+: 5.0
      * - If population not selected: all developed land weight 5.0
+     *
+     * Federal agency codes and multipliers in fed.asc:
+     * - 1 (BLM), 2 (BOR): 0.5x | 3 (DOD): 2x | 4 (FS): 1.5x | 5 (FWS): 2.5x
+     * - 6 (NPS): 2x | 7 (Other): 3x | 8 (TVA): 0.75x | 9 (State Parks): 2x | 10 (Reservations): 50x
      *
      * @param isSelectedPop If true, incorporates population.asc density overlay for urban cells
      * @param path Path to landcover.asc raster
@@ -158,6 +163,7 @@ public class costSolver {
 
         Dictionary headerInfo = getHeader(path);
         double[][] nlcdMatrix = getDetails(headerInfo, path);
+        double[][] fedMatrix = getDetails(headerInfo, "Datasets/ASCII/fed.asc");
 
 
         //Create Output matrix
@@ -245,9 +251,55 @@ public class costSolver {
                         tempMatrix[i][j] = noData;
 
                 }
+            }
+        }
 
+        //Set specified cells to zero before computing costs
+        setCellsToZero(tempMatrix, nlcdMatrix.length, nlcdMatrix[0].length);
+
+        //Apply federal land multipliers
+        for (int i = 0; i < fedMatrix.length; i++) {
+            for (int j = 0; j < fedMatrix[0].length; j++) {
+                int fed = (int) fedMatrix[i][j];
+                double value = tempMatrix[i][j];
+
+                switch (fed) {
+                    case 1: // BLM
+                        tempMatrix[i][j] = value * 0.8;
+                        break;
+                    case 2: // BOR
+                        tempMatrix[i][j] = value * 0.8;
+                        break;
+                    case 3: // DOD
+                        tempMatrix[i][j] = value * 10.0;
+                        break;
+                    case 4: // FS
+                        tempMatrix[i][j] = value * 1.5;
+                        break;
+                    case 5: // FWS
+                        tempMatrix[i][j] = value * 2.5;
+                        break;
+                    case 6: // NPS
+                        tempMatrix[i][j] = value * 25.0;
+                        break;
+                    case 7: // Other
+                        tempMatrix[i][j] = value * 1.0;
+                        break;
+                    case 8: // TVA
+                        tempMatrix[i][j] = value * 1.0;
+                        break;
+                    case 9: // State Parks
+                        tempMatrix[i][j] = value * 25.0;
+                        break;
+                    case 10: // Reservations
+                        tempMatrix[i][j] = value * 1.0;
+                        break;
+                    default:
+                        tempMatrix[i][j] = value;
+                }
+            }
         }
-        }
+
         Dictionary costList = new Hashtable();
         int cell = 1;  // Cells have 1-based indexing in cost list
         for (int i = 0; i < tempMatrix.length; i++) {
@@ -384,9 +436,11 @@ public class costSolver {
                         tempMatrix[i][j] = noData;
 
                 }
-
             }
         }
+
+        //Set specified cells to zero before computing costs
+        setCellsToZero(tempMatrix, nlcdMatrix.length, nlcdMatrix[0].length);
 
         for (int i = 0; i < fedMatrix.length; i++) {
 
@@ -1328,6 +1382,43 @@ public class costSolver {
 
         }
         return cellMatrix;
+    }
+
+    /**
+     * Reads a list of linear cell indices from file and sets those cells to zero.
+     * Converts 1-based linear indices to 0-based (i, j) array coordinates.
+     * File format: one index per line (e.g., cell 1 is top-left, cell NROWS*NCOLS is bottom-right).
+     * Silent fail if file does not exist (cells remain unchanged).
+     *
+     * @param matrix 2D array to modify
+     * @param rows Number of rows in the matrix
+     * @param cols Number of columns in the matrix
+     * @throws IOException if file read fails unexpectedly
+     */
+    private void setCellsToZero(double[][] matrix, int rows, int cols) throws IOException {
+        try {
+            BufferedReader br = new BufferedReader(new FileReader("Datasets/set_cells_to_zero.txt"));
+            String line;
+            while ((line = br.readLine()) != null) {
+                line = line.trim();
+                if (line.isEmpty()) continue;
+                try {
+                    int index = Integer.parseInt(line);
+                    // Convert 1-based linear index to 0-based (i, j) coordinates
+                    int i = (index - 1) / cols;
+                    int j = (index - 1) % cols;
+                    // Bounds check
+                    if (i >= 0 && i < rows && j >= 0 && j < cols) {
+                        matrix[i][j] = 0;
+                    }
+                } catch (NumberFormatException e) {
+                    System.err.println("Warning: Invalid index in set_cells_to_zero.txt: " + line);
+                }
+            }
+            br.close();
+        } catch (FileNotFoundException e) {
+            System.out.println("File Datasets/set_cells_to_zero.txt not found. Skipping cell zeroing.");
+        }
     }
 
     /**

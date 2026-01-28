@@ -35,6 +35,7 @@ Datasets/**
 
 # Re-include a specific file
 !Datasets/SimCCS_Logo.png
+!Datasets/set_cells_to_zero.txt
 
 
 # Ignore everything under Datasets
