@@ -30,8 +30,6 @@ replay_pid*
 Datasets/**
 
 # Re-include specific subfolders
-!Datasets/ASCII/
-!Datasets/ASCII/**
 !Datasets/weights/
 !Datasets/weights/**
 
