@@ -130,7 +130,7 @@ public class writeRaster {
         ImageIO.write(imageBmp, "bmp", new File(bmpPath));
     }
     
-
+}
     
     
 
