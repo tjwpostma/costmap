@@ -35,3 +35,14 @@ Datasets/**
 
 # Re-include a specific file
 !Datasets/SimCCS_Logo.png
+
+
+# Ignore everything under Datasets
+Outputs/**
+
+# Re-include specific subfolders
+!Outputs/construction.png
+!Outputs/construction.bmp
+
+# Re-include a specific file
+!Datasets/SimCCS_Logo.png
