@@ -163,7 +163,21 @@ public class costSolver {
 
         Dictionary headerInfo = getHeader(path);
         double[][] nlcdMatrix = getDetails(headerInfo, path);
-        double[][] fedMatrix = getDetails(headerInfo, "Datasets/ASCII/fed.asc");
+        
+        //Load federal land matrix, or create zero matrix if file doesn't exist
+        double[][] fedMatrix;
+        try {
+            fedMatrix = getDetails(headerInfo, "Datasets/ASCII/fed.asc");
+        } catch (FileNotFoundException e) {
+            System.out.println("File Datasets/ASCII/fed.asc not found. Skipping federal land overlay.");
+            fedMatrix = new double[nlcdMatrix.length][nlcdMatrix[0].length];
+            // Initialize with zeros (no federal land)
+            for (int i = 0; i < fedMatrix.length; i++) {
+                for (int j = 0; j < fedMatrix[0].length; j++) {
+                    fedMatrix[i][j] = 0;
+                }
+            }
+        }
 
 
         //Create Output matrix
@@ -346,7 +360,21 @@ public class costSolver {
 
         Dictionary headerInfo = getHeader(path);
         double[][] nlcdMatrix = getDetails(headerInfo, path);
-        double[][] fedMatrix = getDetails(headerInfo, "Datasets/ASCII/fed.asc");
+        
+        //Load federal land matrix, or create zero matrix if file doesn't exist
+        double[][] fedMatrix;
+        try {
+            fedMatrix = getDetails(headerInfo, "Datasets/ASCII/fed.asc");
+        } catch (FileNotFoundException e) {
+            System.out.println("File Datasets/ASCII/fed.asc not found. Skipping federal land overlay.");
+            fedMatrix = new double[nlcdMatrix.length][nlcdMatrix[0].length];
+            // Initialize with zeros (no federal land)
+            for (int i = 0; i < fedMatrix.length; i++) {
+                for (int j = 0; j < fedMatrix[0].length; j++) {
+                    fedMatrix[i][j] = 0;
+                }
+            }
+        }
 
 
         //Create Output matrix
