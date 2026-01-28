@@ -24,3 +24,16 @@ hs_err_pid*
 replay_pid*
 
 .DS_Store
+
+
+# Ignore everything under Datasets
+Datasets/**
+
+# Re-include specific subfolders
+!Datasets/ASCII/
+!Datasets/ASCII/**
+!Datasets/weights/
+!Datasets/weights/**
+
+# Re-include a specific file
+!Datasets/SimCCS_Logo.png
